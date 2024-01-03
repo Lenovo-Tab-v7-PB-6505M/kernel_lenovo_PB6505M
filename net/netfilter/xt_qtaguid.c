@@ -45,7 +45,6 @@
 #define XT_SOCKET_SUPPORTED_HOOKS \
 	((1 << NF_INET_PRE_ROUTING) | (1 << NF_INET_LOCAL_IN))
 
-
 static const char *module_procdirname = "xt_qtaguid";
 static struct proc_dir_entry *xt_qtaguid_procdir;
 
@@ -123,7 +122,6 @@ static const char *iface_stat_all_procfilename = "iface_stat_all";
 static struct proc_dir_entry *iface_stat_all_procfile;
 static const char *iface_stat_fmt_procfilename = "iface_stat_fmt";
 static struct proc_dir_entry *iface_stat_fmt_procfile;
-
 
 static LIST_HEAD(iface_stat_list);
 static DEFINE_SPINLOCK(iface_stat_list_lock);
@@ -741,7 +739,6 @@ static int iface_stat_fmt_proc_show(struct seq_file *m, void *v)
 	struct rtnl_link_stats64 dev_stats, *stats;
 	struct rtnl_link_stats64 no_dev_stats = {0};
 
-
 	CT_DEBUG("qtaguid:proc iface_stat_fmt pid=%u tgid=%u uid=%u\n",
 		 current->pid, current->tgid, from_kuid(&init_user_ns, current_fsuid()));
 
@@ -1192,7 +1189,7 @@ static void get_dev_and_dir(const struct sk_buff *skb,
 		BUG();
 	}
 	if (skb->dev && *el_dev != skb->dev) {
-		MT_DEBUG("qtaguid[%d]: skb->dev=%p %s vs par->%s=%p %s\n",
+		MT_DEBUG("qtaguid[%d]: skb->dev=%pK %s vs par->%s=%pK %s\n",
 			 par->hooknum, skb->dev, skb->dev->name,
 			 *direction == IFS_RX ? "in" : "out",  *el_dev,
 			 (*el_dev)->name);
@@ -1302,7 +1299,7 @@ static void if_tag_stat_update(const char *ifname, uid_t uid,
 	}
 	/* It is ok to process data when an iface_entry is inactive */
 
-	MT_DEBUG("qtaguid: tag_stat: stat_update() dev=%s entry=%p\n",
+	MT_DEBUG("qtaguid: tag_stat: stat_update() dev=%s entry=%pK\n",
 		 ifname, iface_entry);
 
 	/*
@@ -1320,7 +1317,7 @@ static void if_tag_stat_update(const char *ifname, uid_t uid,
 		uid_tag = make_tag_from_uid(uid);
 	}
 	MT_DEBUG("qtaguid: tag_stat: stat_update(): "
-		 " looking for tag=0x%llx (uid=%u) in ife=%p\n",
+		 " looking for tag=0x%llx (uid=%u) in ife=%pK\n",
 		 tag, get_uid_from_tag(tag), iface_entry);
 	/* Loop over tag list under this interface for {acct_tag,uid_tag} */
 	spin_lock_bh(&iface_entry->tag_stat_list_lock);
@@ -1537,7 +1534,6 @@ static int __init iface_stat_init(struct proc_dir_entry *parent_procdir)
 		goto err_zap_all_stats_entry;
 	}
 
-
 	err = register_netdevice_notifier(&iface_netdev_notifier_blk);
 	if (err) {
 		pr_err("qtaguid: iface_stat: init "
@@ -1579,7 +1575,7 @@ static struct sock *qtaguid_find_sk(const struct sk_buff *skb,
 	struct sock *sk;
 	unsigned int hook_mask = (1 << par->hooknum);
 
-	MT_DEBUG("qtaguid[%d]: find_sk(skb=%p) family=%d\n",
+	MT_DEBUG("qtaguid[%d]: find_sk(skb=%pK) family=%d\n",
 		 par->hooknum, skb, par->family);
 
 	/*
@@ -1601,7 +1597,7 @@ static struct sock *qtaguid_find_sk(const struct sk_buff *skb,
 	}
 
 	if (sk) {
-		MT_DEBUG("qtaguid[%d]: %p->sk_proto=%u->sk_state=%d\n",
+		MT_DEBUG("qtaguid[%d]: %pK->sk_proto=%u->sk_state=%d\n",
 			 par->hooknum, sk, sk->sk_protocol, sk->sk_state);
 	}
 	return sk;
@@ -1758,7 +1754,7 @@ static bool qtaguid_mt(const struct sk_buff *skb, struct xt_action_param *par)
 		kgid_t gid_max = make_kgid(&init_user_ns, info->gid_max);
 		set_sk_callback_lock = true;
 		read_lock_bh(&sk->sk_callback_lock);
-		MT_DEBUG("qtaguid[%d]: sk=%p->sk_socket=%p->file=%p\n",
+		MT_DEBUG("qtaguid[%d]: sk=%pK->sk_socket=%pK->file=%pK\n",
 			 par->hooknum, sk, sk->sk_socket,
 			 sk->sk_socket ? sk->sk_socket->file : (void *)-1LL);
 		filp = sk->sk_socket ? sk->sk_socket->file : NULL;
@@ -2870,7 +2866,6 @@ static int qtudev_release(struct inode *inode, struct file *file)
 
 	spin_unlock_bh(&uid_tag_data_tree_lock);
 	spin_unlock_bh(&sock_tag_list_lock);
-
 
 	sock_tag_tree_erase(&st_to_free_tree);
 
