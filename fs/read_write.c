@@ -23,8 +23,15 @@
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 
-typedef ssize_t (*io_fn_t)(struct file *, char __user *, size_t, loff_t *);
-typedef ssize_t (*iter_fn_t)(struct kiocb *, struct iov_iter *);
+#include <linux/statfs.h>
+#include <linux/mount.h>
+#include "mount.h"
+#include <linux/mmc/mmc.h>
+
+//#ifdef WT_LENOVO_SDCARD_SWAP
+#define CHECK_1TH  (18 * 1024 * 1024)
+#define CHECK_2TH  (16 * 1024 * 1024)
+long long store = 0;
 
 const struct file_operations generic_ro_fops = {
 	.llseek		= generic_file_llseek,
@@ -545,6 +552,40 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 {
 	ssize_t ret;
 
+        struct kstatfs stat;
+        struct mount *mount_data;
+        struct dentry *tmp;
+        ssize_t ischeck=0;
+        ssize_t num=0;
+        mount_data = real_mount(file->f_path.mnt);
+        if (!memcmp(mount_data->mnt_mountpoint->d_name.name, "data", 5)) {
+           store -= count;
+           //printk(KERN_ERR " vfs_write store is %lld",store);
+           if (store <=CHECK_1TH){
+              vfs_statfs(&file->f_path, &stat);
+              store = stat.f_bavail* stat.f_bsize;
+              store -= count;
+              //printk(KERN_ERR " vfs_write store is %lld, bfree=%llu, bsize=%ld,bavail=%llu   ", store,stat.f_bfree,stat.f_bsize,stat.f_bavail);
+              if (store <=CHECK_2TH){
+                 for (tmp = file->f_path.dentry ; tmp !=file->f_path.mnt->mnt_root; tmp = tmp->d_parent){
+                     //printk(KERN_ERR"vfs_write  write data file path %s",tmp->d_name.name);
+                     //check if  path is  /data/data/com.xxxxxxx
+                     if (strstr(tmp->d_name.name, "com.") && !strcmp(tmp->d_parent->d_name.name, "data")){
+                        ischeck=1;
+                        break;
+                     }
+                     num++;
+                     if(num>=10) break;
+                }
+                if (ischeck==1) {
+                    printk(KERN_ERR " vfs_write write data %s  of  %s, space less than 16M renturn nospace",file->f_path.dentry->d_name.name, tmp->d_name.name);
+                    store += count;
+                    return -ENOSPC;
+                }
+              }
+           }
+        }
+
 	if (!(file->f_mode & FMODE_WRITE))
 		return -EBADF;
 	if (!(file->f_mode & FMODE_CAN_WRITE))
@@ -675,7 +716,7 @@ unsigned long iov_shorten(struct iovec *iov, unsigned long nr_segs, size_t to)
 EXPORT_SYMBOL(iov_shorten);
 
 static ssize_t do_iter_readv_writev(struct file *filp, struct iov_iter *iter,
-		loff_t *ppos, iter_fn_t fn, int flags)
+		loff_t *ppos, int type, int flags)
 {
 	struct kiocb kiocb;
 	ssize_t ret;
@@ -692,7 +733,10 @@ static ssize_t do_iter_readv_writev(struct file *filp, struct iov_iter *iter,
 		kiocb.ki_flags |= (IOCB_DSYNC | IOCB_SYNC);
 	kiocb.ki_pos = *ppos;
 
-	ret = fn(&kiocb, iter);
+	if (type == READ)
+		ret = filp->f_op->read_iter(&kiocb, iter);
+	else
+		ret = filp->f_op->write_iter(&kiocb, iter);
 	BUG_ON(ret == -EIOCBQUEUED);
 	*ppos = kiocb.ki_pos;
 	return ret;
@@ -700,7 +744,7 @@ static ssize_t do_iter_readv_writev(struct file *filp, struct iov_iter *iter,
 
 /* Do it by hand, with file-ops */
 static ssize_t do_loop_readv_writev(struct file *filp, struct iov_iter *iter,
-		loff_t *ppos, io_fn_t fn, int flags)
+		loff_t *ppos, int type, int flags)
 {
 	ssize_t ret = 0;
 
@@ -711,7 +755,13 @@ static ssize_t do_loop_readv_writev(struct file *filp, struct iov_iter *iter,
 		struct iovec iovec = iov_iter_iovec(iter);
 		ssize_t nr;
 
-		nr = fn(filp, iovec.iov_base, iovec.iov_len, ppos);
+		if (type == READ) {
+			nr = filp->f_op->read(filp, iovec.iov_base,
+					      iovec.iov_len, ppos);
+		} else {
+			nr = filp->f_op->write(filp, iovec.iov_base,
+					       iovec.iov_len, ppos);
+		}
 
 		if (nr < 0) {
 			if (!ret)
@@ -844,8 +894,6 @@ static ssize_t do_readv_writev(int type, struct file *file,
 	struct iovec *iov = iovstack;
 	struct iov_iter iter;
 	ssize_t ret;
-	io_fn_t fn;
-	iter_fn_t iter_fn;
 
 	ret = import_iovec(type, uvector, nr_segs,
 			   ARRAY_SIZE(iovstack), &iov, &iter);
@@ -859,19 +907,14 @@ static ssize_t do_readv_writev(int type, struct file *file,
 	if (ret < 0)
 		goto out;
 
-	if (type == READ) {
-		fn = file->f_op->read;
-		iter_fn = file->f_op->read_iter;
-	} else {
-		fn = (io_fn_t)file->f_op->write;
-		iter_fn = file->f_op->write_iter;
+	if (type != READ)
 		file_start_write(file);
-	}
 
-	if (iter_fn)
-		ret = do_iter_readv_writev(file, &iter, pos, iter_fn, flags);
+	if ((type == READ && file->f_op->read_iter) ||
+	    (type == WRITE && file->f_op->write_iter))
+		ret = do_iter_readv_writev(file, &iter, pos, type, flags);
 	else
-		ret = do_loop_readv_writev(file, &iter, pos, fn, flags);
+		ret = do_loop_readv_writev(file, &iter, pos, type, flags);
 
 	if (type != READ)
 		file_end_write(file);
@@ -1069,8 +1112,6 @@ static ssize_t compat_do_readv_writev(int type, struct file *file,
 	struct iovec *iov = iovstack;
 	struct iov_iter iter;
 	ssize_t ret;
-	io_fn_t fn;
-	iter_fn_t iter_fn;
 
 	ret = compat_import_iovec(type, uvector, nr_segs,
 				  UIO_FASTIOV, &iov, &iter);
@@ -1084,19 +1125,14 @@ static ssize_t compat_do_readv_writev(int type, struct file *file,
 	if (ret < 0)
 		goto out;
 
-	if (type == READ) {
-		fn = file->f_op->read;
-		iter_fn = file->f_op->read_iter;
-	} else {
-		fn = (io_fn_t)file->f_op->write;
-		iter_fn = file->f_op->write_iter;
+	if (type != READ)
 		file_start_write(file);
-	}
 
-	if (iter_fn)
-		ret = do_iter_readv_writev(file, &iter, pos, iter_fn, flags);
+	if ((type == READ && file->f_op->read_iter) ||
+	    (type == WRITE && file->f_op->write_iter))
+		ret = do_iter_readv_writev(file, &iter, pos, type, flags);
 	else
-		ret = do_loop_readv_writev(file, &iter, pos, fn, flags);
+		ret = do_loop_readv_writev(file, &iter, pos, type, flags);
 
 	if (type != READ)
 		file_end_write(file);
