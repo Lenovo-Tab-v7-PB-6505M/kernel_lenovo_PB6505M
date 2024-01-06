@@ -17,17 +17,18 @@
 
 /*****************************************************************************
 *
-* File Name: focaltech_upgrade_ft8606.c
+* File Name: focaltech_upgrade_ft8719.c
 *
 * Author: Focaltech Driver Team
 *
-* Created: 2016-08-15
+* Created: 2017-11-22
 *
 * Abstract:
 *
 * Reference:
 *
 *****************************************************************************/
+
 /*****************************************************************************
 * 1.Included header files
 *****************************************************************************/
@@ -37,20 +38,19 @@
 /*****************************************************************************
 * Global variable or extern global variabls/functions
 *****************************************************************************/
-u8 pb_file_ft8606[] = {
-#include "../include/pramboot/FT8606_Pramboot_V0.7_20150507.i"
+u8 pb_file_ft8719[] = {
+#include "../include/pramboot/FT8719_Pramboot_V0.5_20171221.i"
 };
 
-/************************************************************************
- * fts_ft8606_upgrade_mode
- * Return: return 0 if success, otherwise return error code
- ***********************************************************************/
-static int fts_ft8606_upgrade_mode(
+/*****************************************************************************
+* Private constant and macro definitions using #define
+*****************************************************************************/
+
+static int fts_ft8719_upgrade_mode(
     struct i2c_client *client,
     enum FW_FLASH_MODE mode,
     u8 *buf,
-    u32 len
-)
+    u32 len)
 {
     int ret = 0;
     u32 start_addr = 0;
@@ -60,7 +60,7 @@ static int fts_ft8606_upgrade_mode(
     int ecc_in_tp = 0;
 
     if ((NULL == buf) || (len < FTS_MIN_LEN)) {
-        FTS_ERROR("buffer/len is invalid");
+        FTS_ERROR("buffer/len(%x) is invalid", len);
         return -EINVAL;
     }
 
@@ -73,15 +73,20 @@ static int fts_ft8606_upgrade_mode(
 
     cmd[0] = FTS_CMD_FLASH_MODE;
     cmd[1] = FLASH_MODE_UPGRADE_VALUE;
-    start_addr = upgrade_func_ft8606.appoff;
-    FTS_INFO("flash mode:0x%02x, start addr=0x%x", cmd[1], start_addr);
+    start_addr = upgrade_func_ft8719.appoff;
+    if (FLASH_MODE_PARAM == mode) {
+        cmd[1] = FLASH_MODE_PARAM_VALUE;
+        /* need add offset of app when use app part */
+        start_addr += upgrade_func_ft8719.paramcfgoff;
+    }
+    FTS_INFO("flash mode:0x%02x, start addr=0x%04x", cmd[1], start_addr);
     ret = fts_i2c_write(client, cmd, 2);
     if (ret < 0) {
         FTS_ERROR("upgrade mode(09) cmd write fail");
         goto fw_reset;
     }
 
-    delay = 60 * (len / FTS_MAX_LEN_SECTOR);
+    delay = FTS_ERASE_SECTOR_DELAY * (len / FTS_MAX_LEN_SECTOR);
     ret = fts_fwupg_erase(client, delay);
     if (ret < 0) {
         FTS_ERROR("erase cmd write fail");
@@ -90,7 +95,7 @@ static int fts_ft8606_upgrade_mode(
 
     /* write app */
     ecc_in_host = fts_flash_write_buf(client, start_addr, buf, len, 1);
-    if (ecc_in_host < 0) {
+    if (ecc_in_host < 0 ) {
         FTS_ERROR("lcd initial code write fail");
         goto fw_reset;
     }
@@ -113,6 +118,7 @@ static int fts_ft8606_upgrade_mode(
     if (ret < 0) {
         FTS_ERROR("reset to normal boot fail");
     }
+
     msleep(400);
     return 0;
 
@@ -120,31 +126,33 @@ fw_reset:
     return -EIO;
 }
 
-
 /************************************************************************
-* Name: fts_ft8606_upgrade
+* Name: fts_ft8719_upgrade
 * Brief:
 * Input:
 * Output:
 * Return: return 0 if success, otherwise return error code
 ***********************************************************************/
-static int fts_ft8606_upgrade(struct i2c_client *client, u8 *buf, u32 len)
+static int fts_ft8719_upgrade(struct i2c_client *client, u8 *buf, u32 len)
 {
     int ret = 0;
+    u8 *tmpbuf = NULL;
+    u32 app_len = 0;
 
-    FTS_FUNC_ENTER();
-
+    FTS_INFO("fw app upgrade...");
     if (NULL == buf) {
         FTS_ERROR("fw buf is null");
         return -EINVAL;
     }
 
-    if ((len < FTS_MIN_LEN) || (len > FTS_MAX_LEN_APP)) {
+    if ((len < FTS_MIN_LEN) || (len > FTS_MAX_LEN_FILE)) {
         FTS_ERROR("fw buffer len(%x) fail", len);
         return -EINVAL;
     }
 
-    ret = fts_ft8606_upgrade_mode(client, FLASH_MODE_APP, buf, len);
+    app_len = len;
+    tmpbuf = buf;
+    ret = fts_ft8719_upgrade_mode(client, FLASH_MODE_APP, tmpbuf, app_len);
     if (ret < 0) {
         FTS_INFO("fw upgrade fail,reset to normal boot");
         if (fts_fwupg_reset_in_boot(client) < 0) {
@@ -156,16 +164,57 @@ static int fts_ft8606_upgrade(struct i2c_client *client, u8 *buf, u32 len)
     return 0;
 }
 
-struct upgrade_func upgrade_func_ft8606 = {
-    .ctype = {0x08},
-    .fwveroff = 0x010A,
-    .fwcfgoff = 0x0780,
-    .appoff = 0x1000,
+/************************************************************************
+ * Name: fts_ft8719_param_upgrade
+ * Brief:
+ * Input: buf - all.bin
+ *        len - len of all.bin
+ * Output:
+ * Return: return 0 if success, otherwise return error code
+ ***********************************************************************/
+static int fts_ft8719_param_upgrade(struct i2c_client *client, u8 *buf, u32 len)
+{
+    int ret = 0;
+    u8 *tmpbuf = NULL;
+    u32 param_length = 0;
+
+    FTS_INFO("parameter configure upgrade...");
+    if (NULL == buf) {
+        FTS_ERROR("fw file buffer is null");
+        return -EINVAL;
+    }
+
+    if ((len < FTS_MIN_LEN) || (len > FTS_MAX_LEN_FILE)) {
+        FTS_ERROR("fw file buffer len(%x) fail", len);
+        return -EINVAL;
+    }
+
+    tmpbuf = buf + upgrade_func_ft8719.paramcfgoff;
+    param_length = len - upgrade_func_ft8719.paramcfgoff;
+    ret = fts_ft8719_upgrade_mode(client, FLASH_MODE_PARAM, tmpbuf, param_length);
+    if (ret < 0) {
+        FTS_INFO("fw upgrade fail,reset to normal boot");
+        if (fts_fwupg_reset_in_boot(client) < 0) {
+            FTS_ERROR("reset to normal boot fail");
+        }
+        return ret;
+    }
+
+    return 0;
+}
+
+struct upgrade_func upgrade_func_ft8719 = {
+    .ctype = {0x0D, 0x0F},
+    .newmode = true,
+    .fwveroff = 0x010E,
+    .fwcfgoff = 0x1F80,
+    .appoff = 0x2000,
+    .paramcfgoff = 0x10000,     /* -appoff */
+    .paramcfgveroff = 0x10004,  /* -appoff */
     .pramboot_supported = true,
-    .pramboot = pb_file_ft8606,
-    .pb_length = sizeof(pb_file_ft8606),
+    .pramboot = pb_file_ft8719,
+    .pb_length = sizeof(pb_file_ft8719),
     .hid_supported = false,
-    .upgrade = fts_ft8606_upgrade,
-    .get_hlic_ver = NULL,
-    .lic_upgrade = NULL,
+    .upgrade = fts_ft8719_upgrade,
+    .param_upgrade = fts_ft8719_param_upgrade,
 };

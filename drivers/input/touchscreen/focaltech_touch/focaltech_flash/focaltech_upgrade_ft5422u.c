@@ -17,11 +17,11 @@
 
 /*****************************************************************************
 *
-* File Name: focaltech_upgrade_ft8606.c
+* File Name: focaltech_upgrade_ft5422u.c
 *
 * Author: Focaltech Driver Team
 *
-* Created: 2016-08-15
+* Created: 2017-07-22
 *
 * Abstract:
 *
@@ -35,32 +35,35 @@
 #include "../focaltech_flash.h"
 
 /*****************************************************************************
-* Global variable or extern global variabls/functions
+* Static function prototypes
 *****************************************************************************/
-u8 pb_file_ft8606[] = {
-#include "../include/pramboot/FT8606_Pramboot_V0.7_20150507.i"
-};
-
 /************************************************************************
- * fts_ft8606_upgrade_mode
- * Return: return 0 if success, otherwise return error code
- ***********************************************************************/
-static int fts_ft8606_upgrade_mode(
-    struct i2c_client *client,
-    enum FW_FLASH_MODE mode,
-    u8 *buf,
-    u32 len
-)
+* Name: fts_ft5422u_upgrade
+* Brief:
+* Input:
+* Output:
+* Return: return 0 if success, otherwise return error code
+***********************************************************************/
+static int fts_ft5422u_upgrade(struct i2c_client *client, u8 *buf, u32 len)
 {
     int ret = 0;
     u32 start_addr = 0;
     u8 cmd[4] = { 0 };
-    u32 delay = 0;
     int ecc_in_host = 0;
     int ecc_in_tp = 0;
 
-    if ((NULL == buf) || (len < FTS_MIN_LEN)) {
-        FTS_ERROR("buffer/len is invalid");
+    u8 wbuf[7] = { 0 };
+    u8 reg_val[4] = {0};
+    u32 temp = 0;
+    int i;
+
+    if (NULL == buf) {
+        FTS_ERROR("fw buf is null");
+        return -EINVAL;
+    }
+
+    if ((len < FTS_MIN_LEN) || (len > (116 * 1024))) {
+        FTS_ERROR("fw buffer len(%x) fail", len);
         return -EINVAL;
     }
 
@@ -73,35 +76,66 @@ static int fts_ft8606_upgrade_mode(
 
     cmd[0] = FTS_CMD_FLASH_MODE;
     cmd[1] = FLASH_MODE_UPGRADE_VALUE;
-    start_addr = upgrade_func_ft8606.appoff;
-    FTS_INFO("flash mode:0x%02x, start addr=0x%x", cmd[1], start_addr);
     ret = fts_i2c_write(client, cmd, 2);
     if (ret < 0) {
         FTS_ERROR("upgrade mode(09) cmd write fail");
         goto fw_reset;
     }
 
-    delay = 60 * (len / FTS_MAX_LEN_SECTOR);
-    ret = fts_fwupg_erase(client, delay);
+    cmd[0] = FTS_CMD_DATA_LEN;
+    cmd[1] = BYTE_OFF_16(len);
+    cmd[2] = BYTE_OFF_8(len);
+    cmd[3] = BYTE_OFF_0(len);
+    ret = fts_i2c_write(client, cmd, FTS_CMD_DATA_LEN_LEN);
+    if (ret < 0) {
+        FTS_ERROR("data len cmd write fail");
+        goto fw_reset;
+    }
+
+    ret = fts_fwupg_erase(client, FTS_REASE_APP_DELAY);
     if (ret < 0) {
         FTS_ERROR("erase cmd write fail");
         goto fw_reset;
     }
 
     /* write app */
+    start_addr = upgrade_func_ft5422u.appoff;
     ecc_in_host = fts_flash_write_buf(client, start_addr, buf, len, 1);
-    if (ecc_in_host < 0) {
+    if (ecc_in_host < 0 ) {
         FTS_ERROR("lcd initial code write fail");
         goto fw_reset;
     }
 
-    /* ecc */
-    ecc_in_tp = fts_fwupg_ecc_cal(client, start_addr, len);
-    if (ecc_in_tp < 0 ) {
-        FTS_ERROR("ecc read fail");
-        goto fw_reset;
-    }
+    FTS_DEBUG("[UPGRADE]: read out checksum!!");
+    wbuf[0] = FTS_CMD_ECC_INIT;
+    fts_i2c_write(client, wbuf, 1);
 
+    temp = 0;
+    wbuf[0] = FTS_CMD_ECC_CAL;
+    wbuf[1] = BYTE_OFF_16(temp);
+    wbuf[2] = BYTE_OFF_8(temp);
+    wbuf[3] = BYTE_OFF_0(temp);
+
+    wbuf[4] = BYTE_OFF_16(len);
+    wbuf[5] = BYTE_OFF_8(len);
+    wbuf[6] = BYTE_OFF_0(len);
+    ret = fts_i2c_write(client, wbuf, 7);
+    msleep(len / 256);
+
+    for (i = 0; i < FTS_RETRIES_ECC_CAL; i++) {
+        wbuf[0] = FTS_CMD_FLASH_STATUS;
+        reg_val[0] = reg_val[1] = 0x00;
+        fts_i2c_read(client, wbuf, 1, reg_val, 2);
+        FTS_DEBUG("[UPGRADE]: reg_val[0]=%02x reg_val[0]=%02x!!", reg_val[0], reg_val[1]);
+        if ((0xF0 == reg_val[0]) && (0x55 == reg_val[1])) {
+            break;
+        }
+        msleep(FTS_RETRIES_DELAY_ECC_CAL);
+    }
+    wbuf[0] = FTS_CMD_ECC_READ;
+    fts_i2c_read(client, wbuf, 1, reg_val, 1);
+
+    ecc_in_tp = reg_val[0];
     FTS_INFO("ecc in tp:%x, host:%x", ecc_in_tp, ecc_in_host);
     if (ecc_in_tp != ecc_in_host) {
         FTS_ERROR("ecc check fail");
@@ -113,59 +147,26 @@ static int fts_ft8606_upgrade_mode(
     if (ret < 0) {
         FTS_ERROR("reset to normal boot fail");
     }
-    msleep(400);
+
+    msleep(200);
     return 0;
 
 fw_reset:
+    FTS_INFO("upgrade fail, reset to normal boot");
+    ret = fts_fwupg_reset_in_boot(client);
+    if (ret < 0) {
+        FTS_ERROR("reset to normal boot fail");
+    }
     return -EIO;
 }
 
-
-/************************************************************************
-* Name: fts_ft8606_upgrade
-* Brief:
-* Input:
-* Output:
-* Return: return 0 if success, otherwise return error code
-***********************************************************************/
-static int fts_ft8606_upgrade(struct i2c_client *client, u8 *buf, u32 len)
-{
-    int ret = 0;
-
-    FTS_FUNC_ENTER();
-
-    if (NULL == buf) {
-        FTS_ERROR("fw buf is null");
-        return -EINVAL;
-    }
-
-    if ((len < FTS_MIN_LEN) || (len > FTS_MAX_LEN_APP)) {
-        FTS_ERROR("fw buffer len(%x) fail", len);
-        return -EINVAL;
-    }
-
-    ret = fts_ft8606_upgrade_mode(client, FLASH_MODE_APP, buf, len);
-    if (ret < 0) {
-        FTS_INFO("fw upgrade fail,reset to normal boot");
-        if (fts_fwupg_reset_in_boot(client) < 0) {
-            FTS_ERROR("reset to normal boot fail");
-        }
-        return ret;
-    }
-
-    return 0;
-}
-
-struct upgrade_func upgrade_func_ft8606 = {
-    .ctype = {0x08},
-    .fwveroff = 0x010A,
-    .fwcfgoff = 0x0780,
-    .appoff = 0x1000,
-    .pramboot_supported = true,
-    .pramboot = pb_file_ft8606,
-    .pb_length = sizeof(pb_file_ft8606),
-    .hid_supported = false,
-    .upgrade = fts_ft8606_upgrade,
-    .get_hlic_ver = NULL,
-    .lic_upgrade = NULL,
+struct upgrade_func upgrade_func_ft5422u = {
+    .ctype = {0x82},
+    .fwveroff = 0x0014,
+    .fwcfgoff = 0xD780,
+    .appoff = 0x0000,
+    .pramboot_supported = false,
+    .hid_supported = true,
+    .upgrade = fts_ft5422u_upgrade,
 };
+
