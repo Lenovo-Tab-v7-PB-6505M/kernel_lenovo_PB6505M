@@ -155,6 +155,7 @@
 		qcom,csiphy-sd-index = <1>;
 		qcom,csid-sd-index = <1>;
 		qcom,mount-angle = <90>;
+		qcom,led-flash-src = <&led_flash1>;
 		cam_vdig-supply = <&pm8953_l23>;
 		cam_vana-supply = <&pm8953_l22>;
 		cam_vio-supply = <&pm8953_l6>;
