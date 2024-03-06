@@ -44,7 +44,8 @@ ssize_t led_trigger_store(struct device *dev, struct device_attribute *attr,
 		goto unlock;
 	}
 
-	if (sysfs_streq(buf, "none")) {
+	if (sysfs_streq(buf, "none") &&
+			!(led_cdev->flags & LED_KEEP_TRIGGER)) {
 		led_trigger_remove(led_cdev);
 		goto unlock;
 	}
@@ -293,7 +294,19 @@ void led_trigger_event(struct led_trigger *trig,
 	read_unlock(&trig->leddev_list_lock);
 }
 EXPORT_SYMBOL_GPL(led_trigger_event);
+void led_set_brightness_by_name(char *name,
+			enum led_brightness brightness)
+{
+	struct led_classdev *led_cdev;
 
+        down_read(&leds_list_lock);
+	list_for_each_entry(led_cdev, &leds_list, node) {
+             if(!strcmp(led_cdev->name,name))
+		led_set_brightness(led_cdev, brightness);
+        }
+	up_read(&leds_list_lock);
+}
+EXPORT_SYMBOL_GPL(led_set_brightness_by_name);
 static void led_trigger_blink_setup(struct led_trigger *trig,
 			     unsigned long *delay_on,
 			     unsigned long *delay_off,
