@@ -100,6 +100,10 @@ static int sdcardfs_create(struct inode *dir, struct dentry *dentry,
 	task_lock(current);
 	current->fs = copied_fs;
 	task_unlock(current);
+<<<<<<< HEAD
+=======
+
+>>>>>>> f9b8314c64640cd10c7b14ce9d2a11a0dc02a941
 	err = vfs_create2(lower_dentry_mnt, d_inode(lower_parent_dentry), lower_dentry, mode, want_excl);
 	if (err)
 		goto out;
@@ -116,7 +120,10 @@ out:
 	task_lock(current);
 	current->fs = saved_fs;
 	task_unlock(current);
+<<<<<<< HEAD
 
+=======
+>>>>>>> f9b8314c64640cd10c7b14ce9d2a11a0dc02a941
 	free_fs_struct(copied_fs);
 out_unlock:
 	unlock_dir(lower_parent_dentry);
@@ -181,7 +188,10 @@ out_eacces:
 	return err;
 }
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> f9b8314c64640cd10c7b14ce9d2a11a0dc02a941
 static int touch(char *abs_path, mode_t mode)
 {
 	struct file *filp = filp_open(abs_path, O_RDWR|O_CREAT|O_EXCL|O_NOFOLLOW, mode);
@@ -259,6 +269,10 @@ static int sdcardfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode
 	task_lock(current);
 	current->fs = copied_fs;
 	task_unlock(current);
+<<<<<<< HEAD
+=======
+
+>>>>>>> f9b8314c64640cd10c7b14ce9d2a11a0dc02a941
 	err = vfs_mkdir2(lower_mnt, d_inode(lower_parent_dentry), lower_dentry, mode);
 
 	if (err) {
@@ -316,7 +330,10 @@ static int sdcardfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode
 						-ENOMEM);
 			goto out;
 		}
+<<<<<<< HEAD
 	
+=======
+>>>>>>> f9b8314c64640cd10c7b14ce9d2a11a0dc02a941
 		set_fs_pwd(current->fs, &lower_path);
 		touch_err = touch(".nomedia", 0664);
 		if (touch_err) {
@@ -388,7 +405,10 @@ out_eacces:
 	return err;
 }
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> f9b8314c64640cd10c7b14ce9d2a11a0dc02a941
 /*
  * The locking rules in sdcardfs_rename are complex.  We could use a simpler
  * superblock-level name-space lock for renames and copy-ups.
@@ -421,6 +441,10 @@ static int sdcardfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 						SDCARDFS_I(new_dir)->data);
 	if (!saved_cred)
 		return -ENOMEM;
+<<<<<<< HEAD
+=======
+
+>>>>>>> f9b8314c64640cd10c7b14ce9d2a11a0dc02a941
 	sdcardfs_get_real_lower(old_dentry, &lower_old_path);
 	sdcardfs_get_lower_path(new_dentry, &lower_new_path);
 	lower_old_dentry = lower_old_path.dentry;
@@ -530,7 +554,11 @@ static const char *sdcardfs_follow_link(struct dentry *dentry, void **cookie)
 
 static int sdcardfs_permission_wrn(struct inode *inode, int mask)
 {
+<<<<<<< HEAD
 	pr_debug("sdcardfs does not support permission. Use permission2.\n");
+=======
+	WARN_RATELIMIT(1, "sdcardfs does not support permission. Use permission2.\n");
+>>>>>>> f9b8314c64640cd10c7b14ce9d2a11a0dc02a941
 	return -EINVAL;
 }
 
@@ -808,7 +836,10 @@ const struct inode_operations sdcardfs_dir_iops = {
 	.setattr	= sdcardfs_setattr_wrn,
 	.setattr2	= sdcardfs_setattr,
 	.getattr	= sdcardfs_getattr,
+<<<<<<< HEAD
 	
+=======
+>>>>>>> f9b8314c64640cd10c7b14ce9d2a11a0dc02a941
 };
 
 const struct inode_operations sdcardfs_main_iops = {

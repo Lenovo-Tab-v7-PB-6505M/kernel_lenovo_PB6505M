@@ -13,6 +13,7 @@
 #include <linux/kmsg_dump.h>
 #include <linux/kallsyms.h>
 #include <linux/notifier.h>
+#include <linux/vt_kern.h>
 #include <linux/module.h>
 #include <linux/random.h>
 #include <linux/ftrace.h>
@@ -28,7 +29,6 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/exception.h>
 #include <soc/qcom/minidump.h>
-#include <linux/wt_system_monitor.h>
 
 #define PANIC_TIMER_STEP 100
 #define PANIC_BLINK_SPD 18
@@ -149,6 +149,7 @@ void panic(const char *fmt, ...)
 	 * after setting panic_cpu) from invoking panic() again.
 	 */
 	local_irq_disable();
+	preempt_disable_notrace();
 
 	/*
 	 * It's possible to come here directly from a panic-assertion and
@@ -178,9 +179,6 @@ void panic(const char *fmt, ...)
 	va_end(args);
 	dump_stack_minidump(0);
 	pr_emerg("Kernel panic - not syncing: %s\n", buf);
-#ifdef WT_BOOT_REASON
-	save_panic_key_log("Kernel panic - not syncing: %s\n", buf);
-#endif
 #ifdef CONFIG_DEBUG_BUGVERBOSE
 	/*
 	 * Avoid nested stack-dumping if a panic occurs during oops processing
@@ -238,7 +236,10 @@ void panic(const char *fmt, ...)
 	if (_crash_kexec_post_notifiers)
 		__crash_kexec(NULL);
 
-	bust_spinlocks(0);
+#ifdef CONFIG_VT
+	unblank_screen();
+#endif
+	console_unblank();
 
 	/*
 	 * We may have ended up stopping the CPU holding the lock (in
@@ -608,7 +609,7 @@ EXPORT_SYMBOL(warn_slowpath_null);
  */
 __visible void __stack_chk_fail(void)
 {
-	panic("stack-protector: Kernel stack is corrupted in: %p\n",
+	panic("stack-protector: Kernel stack is corrupted in: %pB\n",
 		__builtin_return_address(0));
 }
 EXPORT_SYMBOL(__stack_chk_fail);

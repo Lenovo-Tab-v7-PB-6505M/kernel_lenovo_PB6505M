@@ -318,6 +318,7 @@ bfa_ioc_sm_reset(struct bfa_ioc_s *ioc, enum ioc_event event)
 	}
 }
 
+
 static void
 bfa_ioc_sm_enabling_entry(struct bfa_ioc_s *ioc)
 {
@@ -368,6 +369,7 @@ bfa_ioc_sm_enabling(struct bfa_ioc_s *ioc, enum ioc_event event)
 		bfa_sm_fault(ioc, event);
 	}
 }
+
 
 static void
 bfa_ioc_sm_getattr_entry(struct bfa_ioc_s *ioc)
@@ -461,6 +463,7 @@ bfa_ioc_sm_op(struct bfa_ioc_s *ioc, enum ioc_event event)
 	}
 }
 
+
 static void
 bfa_ioc_sm_disabling_entry(struct bfa_ioc_s *ioc)
 {
@@ -535,6 +538,7 @@ bfa_ioc_sm_disabled(struct bfa_ioc_s *ioc, enum ioc_event event)
 	}
 }
 
+
 static void
 bfa_ioc_sm_fail_retry_entry(struct bfa_ioc_s *ioc)
 {
@@ -586,6 +590,7 @@ bfa_ioc_sm_fail_retry(struct bfa_ioc_s *ioc, enum ioc_event event)
 		bfa_sm_fault(ioc, event);
 	}
 }
+
 
 static void
 bfa_ioc_sm_fail_entry(struct bfa_ioc_s *ioc)
@@ -1661,6 +1666,7 @@ bfa_ioc_flash_fwver_cmp(struct bfa_ioc_s *ioc,
 		return BFI_IOC_IMG_VER_INCOMP;
 }
 
+
 /*
  * Invalidate fwver signature
  */
@@ -1894,6 +1900,7 @@ bfa_ioc_download_fw(struct bfa_ioc_s *ioc, u32 boot_type,
 
 	bfa_trc(ioc, fwimg_size);
 
+
 	pgnum = PSS_SMEM_PGNUM(ioc->ioc_regs.smem_pg0, loff);
 	pgoff = PSS_SMEM_PGOFF(loff);
 
@@ -1958,6 +1965,7 @@ bfa_ioc_download_fw(struct bfa_ioc_s *ioc, u32 boot_type,
 			swab32(boot_env));
 	return BFA_STATUS_OK;
 }
+
 
 /*
  * Update BFA configuration from firmware configuration.
@@ -2270,6 +2278,8 @@ bfa_ioc_auto_recover(bfa_boolean_t auto_recover)
 {
 	bfa_auto_recover = auto_recover;
 }
+
+
 
 bfa_boolean_t
 bfa_ioc_is_operational(struct bfa_ioc_s *ioc)
@@ -2793,7 +2803,7 @@ void
 bfa_ioc_get_adapter_manufacturer(struct bfa_ioc_s *ioc, char *manufacturer)
 {
 	memset((void *)manufacturer, 0, BFA_ADAPTER_MFG_NAME_LEN);
-	strncpy(manufacturer, BFA_MFG_NAME, BFA_ADAPTER_MFG_NAME_LEN);
+	strlcpy(manufacturer, BFA_MFG_NAME, BFA_ADAPTER_MFG_NAME_LEN);
 }
 
 void
@@ -2960,6 +2970,7 @@ bfa_ioc_debug_fwsave(struct bfa_ioc_s *ioc, void *trcdata, int *trclen)
 	*trclen = tlen;
 	return BFA_STATUS_OK;
 }
+
 
 /*
  * Retrieve saved firmware trace from a prior IOC failure.
@@ -6973,6 +6984,7 @@ bfa_flash_read_end(void __iomem *pci_bar, u32 len, char *buf)
  *
  * Return status.
  */
+
 
 #define FLASH_BLOCKING_OP_MAX   500
 #define FLASH_SEM_LOCK_REG	0x18820

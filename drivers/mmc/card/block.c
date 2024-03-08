@@ -46,10 +46,6 @@
 #include <linux/mmc/mmc.h>
 #include <linux/mmc/sd.h>
 
-#ifdef CONFIG_MMC_FFU
-#include <linux/mmc/ffu.h>
-#endif
-
 #include <asm/uaccess.h>
 
 #include "queue.h"
@@ -972,163 +968,6 @@ static int __mmc_blk_ioctl_cmd(struct mmc_card *card, struct mmc_blk_data *md,
 	return err;
 }
 
-#ifdef CONFIG_MMC_FFU
-/* This function is modified by from mmc_blk_ioctl() */
-static int mmc_ffu_ioctl(struct block_device *bdev,
-	struct mmc_ioc_cmd __user *ic_ptr)
-{
-	struct mmc_blk_ioc_data *idata;
-	struct mmc_blk_data *md;
-	struct mmc_card *card;
-	struct mmc_command cmd = {0};
-	struct mmc_data data = {0};
-	struct mmc_request mrq = {NULL};
-	struct scatterlist sg;
-	int err = 0;
-
-	idata = mmc_ffu_ioctl_copy_from_user(ic_ptr);
-	if (IS_ERR(idata))
-		return PTR_ERR(idata);
-
-	md = mmc_blk_get(bdev->bd_disk);
-	if (!md) {
-		err = -EINVAL;
-		goto cmd_err;
-	}
-
-	card = md->queue.card;
-	if (IS_ERR(card)) {
-		err = PTR_ERR(card);
-		goto cmd_done;
-	}
-
-	cmd.opcode = idata->ic.opcode;
-	cmd.arg = idata->ic.arg;
-	cmd.flags = idata->ic.flags;
-
-	if (idata->buf_bytes) {
-		data.sg = &sg;
-		data.sg_len = 1;
-		data.blksz = idata->ic.blksz;
-		data.blocks = idata->ic.blocks;
-
-		sg_init_one(data.sg, idata->buf, idata->buf_bytes);
-
-		if (idata->ic.write_flag)
-			data.flags = MMC_DATA_WRITE;
-		else
-			data.flags = MMC_DATA_READ;
-
-		/* data.flags must already be set before doing this. */
-		mmc_set_data_timeout(&data, card);
-
-		/* Allow overriding the timeout_ns for empirical tuning. */
-		if (idata->ic.data_timeout_ns)
-			data.timeout_ns = idata->ic.data_timeout_ns;
-
-		if ((cmd.flags & MMC_RSP_R1B) == MMC_RSP_R1B) {
-			/*
-			 * Pretend this is a data transfer and rely on the
-			 * host driver to compute timeout.  When all host
-			 * drivers support cmd.cmd_timeout for R1B, this
-			 * can be changed to:
-			 *
-			 *     mrq.data = NULL;
-			 *     cmd.cmd_timeout = idata->ic.cmd_timeout_ms;
-			 */
-			data.timeout_ns = idata->ic.cmd_timeout_ms * 1000000;
-		}
-
-		mrq.data = &data;
-	}
-
-	mrq.cmd = &cmd;
-
-#ifdef CONFIG_MTK_EMMC_CQ_SUPPORT
-//	cmdq_en = card->ext_csd.cmdq_mode_en;
-//	if (cmdq_en) {
-	//	atomic_set(&card->host->stop_queue, 1);
-	//	mmc_wait_cmdq_empty(card->host);
-		mmc_claim_host(card->host);
-
-		err = mmc_blk_cmdq_switch(card, md, 0);
-		if (err) {
-			pr_err("FFU: %s: disable cmdq error %d\n",
-				mmc_hostname(card->host), err);
-		//	atomic_set(&card->host->stop_queue, 0);
-			mmc_release_host(card->host);
-			goto cmd_done;
-		}
-//	} else
-#endif
-		//mmc_claim_host(card->host);
-
-	if (cmd.opcode == MMC_FFU_DOWNLOAD_OP) {
-		pr_err("FFU Download start\n");
-		err = mmc_ffu_download(card, &cmd, idata->buf,
-			idata->buf_bytes);
-
-		if (err) {
-			pr_err("FFU: %s: error %d FFU download:\n",
-				mmc_hostname(card->host), err);
-		}
-
-	}
-
-	if (cmd.opcode == MMC_SEND_EXT_CSD) {
-
-		mmc_wait_for_req(card->host, &mrq);
-
-		if (cmd.error) {
-			dev_err(mmc_dev(card->host), "%s: cmd error %d\n",
-				__func__, cmd.error);
-			err = cmd.error;
-			goto cmd_rel_host;
-		}
-		if (data.error) {
-			dev_err(mmc_dev(card->host), "%s: data error %d\n",
-				__func__, data.error);
-			err = data.error;
-			goto cmd_rel_host;
-		}
-
-		if (copy_to_user(&(ic_ptr->response), cmd.resp, sizeof(cmd.resp))) {
-			err = -EFAULT;
-			goto cmd_rel_host;
-		}
-
-		if (!idata->ic.write_flag) {
-			if (copy_to_user((void __user *)(unsigned long) idata->ic.data_ptr,
-				idata->buf, idata->buf_bytes)) {
-				err = -EFAULT;
-				goto cmd_rel_host;
-			}
-		}
-
-	}
-
-cmd_rel_host:
-#ifdef CONFIG_MTK_EMMC_CQ_SUPPORT
-//	if (cmdq_en) {
-		err = mmc_blk_cmdq_switch(card,md,1);
-		if (err)
-			pr_err("FFU: %s: enable cmdq error %d\n",
-				mmc_hostname(card->host), err);
-	//	atomic_set(&card->host->stop_queue, 0);
-//	}
-#endif
-	mmc_release_host(card->host);
-
-cmd_done:
-	mmc_blk_put(md);
-cmd_err:
-	kfree(idata->buf);
-	kfree(idata);
-	return err;
-
-}
-#endif
-
 struct mmc_blk_ioc_rpmb_data {
 	struct mmc_blk_ioc_data *data[MMC_IOC_MAX_RPMB_CMD];
 };
@@ -1325,6 +1164,7 @@ cmd_rel_host:
 	atomic_set(&card->host->rpmb_req_pending, 0);
 	mutex_unlock(&card->host->rpmb_req_mutex);
 
+
 idata_free:
 	for (i = 0; i < MMC_IOC_MAX_RPMB_CMD; i++) {
 		kfree(idata->data[i]->buf);
@@ -1460,12 +1300,29 @@ static int mmc_blk_ioctl_multi_cmd(struct block_device *bdev,
 
 	mmc_get_card(card);
 
+	if (mmc_card_cmdq(card)) {
+		err = mmc_cmdq_halt(card->host, true);
+		if (err) {
+			pr_err("%s: halt failed while doing %s err (%d)\n",
+					mmc_hostname(card->host),
+					__func__, err);
+			mmc_put_card(card);
+			goto cmd_done;
+		}
+	}
+
 	for (i = 0; i < num_of_cmds && !ioc_err; i++)
 		ioc_err = __mmc_blk_ioctl_cmd(card, md, idata[i]);
 
 	/* Always switch back to main area after RPMB access */
 	if (md->area_type & MMC_BLK_DATA_AREA_RPMB)
 		mmc_blk_part_switch(card, dev_get_drvdata(&card->dev));
+
+	if (mmc_card_cmdq(card)) {
+		if (mmc_cmdq_halt(card->host, false))
+			pr_err("%s: %s: cmdq unhalt failed\n",
+			       mmc_hostname(card->host), __func__);
+	}
 
 	mmc_put_card(card);
 
@@ -1497,10 +1354,6 @@ static int mmc_blk_ioctl(struct block_device *bdev, fmode_t mode,
 	case MMC_IOC_MULTI_CMD:
 		return mmc_blk_ioctl_multi_cmd(bdev,
 				(struct mmc_ioc_multi_cmd __user *)arg);
-	#ifdef CONFIG_MMC_FFU
-	case MMC_IOC_FFU_CMD:
-		return mmc_ffu_ioctl(bdev, (struct mmc_ioc_cmd __user *)arg);
-	#endif
 	default:
 		return -EINVAL;
 	}
@@ -2139,7 +1992,7 @@ retry:
 				 arg == MMC_TRIM_ARG ?
 				 INAND_CMD38_ARG_TRIM :
 				 INAND_CMD38_ARG_ERASE,
-				 0);
+				 card->ext_csd.generic_cmd6_time);
 		if (err)
 			goto out;
 	}
@@ -2250,7 +2103,7 @@ retry:
 				 arg == MMC_SECURE_TRIM1_ARG ?
 				 INAND_CMD38_ARG_SECTRIM1 :
 				 INAND_CMD38_ARG_SECERASE,
-				 0);
+				 card->ext_csd.generic_cmd6_time);
 		if (err)
 			goto out_retry;
 	}
@@ -2266,7 +2119,7 @@ retry:
 			err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
 					 INAND_CMD38_ARG_EXT_CSD,
 					 INAND_CMD38_ARG_SECTRIM2,
-					 0);
+					 card->ext_csd.generic_cmd6_time);
 			if (err)
 				goto out_retry;
 		}
@@ -3296,6 +3149,7 @@ static struct mmc_cmdq_req *mmc_cmdq_prep_dcmd(
 
 	return &mqrq->cmdq_req;
 }
+
 
 #define IS_RT_CLASS_REQ(x)     \
 	(IOPRIO_PRIO_CLASS(req_get_ioprio(x)) == IOPRIO_CLASS_RT)

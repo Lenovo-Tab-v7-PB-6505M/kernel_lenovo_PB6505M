@@ -763,6 +763,7 @@ static ssize_t store_enable(struct device *dev,
 		/* Suspend the clock scaling and mask host capability */
 		if (host->clk_scaling.enable)
 			mmc_suspend_clk_scaling(host);
+		host->clk_scaling.enable = false;
 		host->caps2 &= ~MMC_CAP2_CLK_SCALE;
 		host->clk_scaling.state = MMC_LOAD_HIGH;
 		/* Set to max. frequency when disabling */
@@ -771,8 +772,10 @@ static ssize_t store_enable(struct device *dev,
 	} else if (value) {
 		/* Unmask host capability and resume scaling */
 		host->caps2 |= MMC_CAP2_CLK_SCALE;
-		if (!host->clk_scaling.enable)
+		if (!host->clk_scaling.enable) {
+			host->clk_scaling.enable = true;
 			mmc_resume_clk_scaling(host);
+		}
 	}
 
 	mmc_put_card(host->card);
@@ -948,6 +951,16 @@ static struct attribute_group dev_attr_grp = {
 	.attrs = dev_attrs,
 };
 
+static int mmc_validate_host_caps(struct mmc_host *host)
+{
+	if (host->caps & MMC_CAP_SDIO_IRQ && !host->ops->enable_sdio_irq) {
+		dev_warn(host->parent, "missing ->enable_sdio_irq() ops\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 /**
  *	mmc_add_host - initialise host hardware
  *	@host: mmc host
@@ -960,8 +973,9 @@ int mmc_add_host(struct mmc_host *host)
 {
 	int err;
 
-	WARN_ON((host->caps & MMC_CAP_SDIO_IRQ) &&
-		!host->ops->enable_sdio_irq);
+	err = mmc_validate_host_caps(host);
+	if (err)
+		return err;
 
 	err = device_add(&host->class_dev);
 	if (err)

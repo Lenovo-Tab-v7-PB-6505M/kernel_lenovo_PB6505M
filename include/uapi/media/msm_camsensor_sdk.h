@@ -255,7 +255,9 @@ enum msm_camera_i2c_operation {
 	MSM_CAM_WRITE = 0,
 	MSM_CAM_POLL,
 	MSM_CAM_READ,
-	MSM_CAM_READ_GC5025A,
+#define MSM_CAM_READ_LOOP \
+	MSM_CAM_READ_LOOP
+	MSM_CAM_READ_LOOP = 3,
 };
 
 struct msm_sensor_i2c_sync_params {
@@ -308,9 +310,6 @@ struct msm_sensor_id_info_t {
 	unsigned short sensor_id;
 	unsigned short sensor_id_mask;
 	struct msm_camera_i2c_reg_setting setting;
-	unsigned short eeprom_slave;
-	unsigned short vendor_id_addr;
-	uint16_t vendor_id;
 };
 
 struct msm_camera_sensor_slave_info {

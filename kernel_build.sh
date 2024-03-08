@@ -1,7 +1,5 @@
 #!/bin/bash
-root_dir=`pwd`
-cd ${root_dir} && cd ../../
-kernel_dir=`pwd` && cd ${root_dir}
+kernel_dir=`pwd`
 echo "kernel_dir=$kernel_dir"
 
 mkdir out

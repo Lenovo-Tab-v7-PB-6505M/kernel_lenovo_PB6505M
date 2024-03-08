@@ -232,7 +232,10 @@ static struct sk_buff *codel_dequeue(void *ctx,
 		    codel_time_before(now - vars->drop_next,
 				      16 * params->interval)) {
 			vars->count = delta;
-			
+			/* we dont care if rec_inv_sqrt approximation
+			 * is not very precise :
+			 * Next Newton steps will correct it quadratically.
+			 */
 			codel_Newton_step(vars);
 		} else {
 			vars->count = 1;

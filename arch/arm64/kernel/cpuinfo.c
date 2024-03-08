@@ -68,6 +68,17 @@ static const char *const hwcap_str[] = {
 	"atomics",
 	"fphp",
 	"asimdhp",
+	"cpuid",
+	"asimdrdm",
+	"jscvt",
+	"fcma",
+	"lrcpc",
+	"dcpop",
+	"sha3",
+	"sm3",
+	"sm4",
+	"asimddp",
+	"sha512",
 	NULL
 };
 
@@ -164,15 +175,11 @@ static int c_show(struct seq_file *m, void *v)
 		seq_printf(m, "CPU part\t: 0x%03x\n", MIDR_PARTNUM(midr));
 		seq_printf(m, "CPU revision\t: %d\n\n", MIDR_REVISION(midr));
 	}
-//here is tmp;source in sdm450.dtsi:17: model = "Qualcomm Technologies, Inc. SDM450";
-#if 0
+
 	if (!arch_read_hardware_id)
 		seq_printf(m, "Hardware\t: %s\n", machine_name);
 	else
 		seq_printf(m, "Hardware\t: %s\n", arch_read_hardware_id());
-#else
-	seq_printf(m, "Hardware\t: %s\n", "QUALCOMM OCTA-CORE 450");
-#endif
 
 	return 0;
 }
@@ -352,6 +359,7 @@ static void __cpuinfo_store_cpu(struct cpuinfo_arm64 *info)
 	info->reg_id_aa64dfr1 = read_cpuid(ID_AA64DFR1_EL1);
 	info->reg_id_aa64isar0 = read_cpuid(ID_AA64ISAR0_EL1);
 	info->reg_id_aa64isar1 = read_cpuid(ID_AA64ISAR1_EL1);
+	info->reg_id_aa64isar2 = read_cpuid(ID_AA64ISAR2_EL1);
 	info->reg_id_aa64mmfr0 = read_cpuid(ID_AA64MMFR0_EL1);
 	info->reg_id_aa64mmfr1 = read_cpuid(ID_AA64MMFR1_EL1);
 	info->reg_id_aa64mmfr2 = read_cpuid(ID_AA64MMFR2_EL1);

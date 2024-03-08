@@ -92,7 +92,11 @@
 
 /* Permission mode for a specific node. Controls how file permissions
  * are derived for children nodes.
+<<<<<<< HEAD
 */
+=======
+ */
+>>>>>>> f9b8314c64640cd10c7b14ce9d2a11a0dc02a941
 typedef enum {
 	/* Nothing special; this node should just inherit from its parent. */
 	PERM_INHERIT,
@@ -197,7 +201,13 @@ struct sdcardfs_mount_options {
 	bool multiuser;
 	bool gid_derivation;
 	bool default_normal;
+<<<<<<< HEAD
 	unsigned int reserved_mb;
+=======
+	bool unshared_obb;
+	unsigned int reserved_mb;
+	bool nocache;
+>>>>>>> f9b8314c64640cd10c7b14ce9d2a11a0dc02a941
 };
 
 struct sdcardfs_vfsmount_options {

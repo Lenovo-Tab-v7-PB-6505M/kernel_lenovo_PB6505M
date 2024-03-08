@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2018, Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2019, Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -1308,24 +1308,32 @@ static void ufs_qcom_dev_ref_clk_ctrl(struct ufs_qcom_host *host, bool enable)
 		/*
 		 * If we are here to disable this clock it might be immediately
 		 * after entering into hibern8 in which case we need to make
-		 * sure that device ref_clk is active at least 1us after the
-		 * hibern8 enter.
+		 * sure that device ref_clk is active for a given time after the
+		 * hibern8 enter for pre UFS3.0 devices
 		 */
 		if (!enable)
-			udelay(1);
+			udelay(host->hba->dev_ref_clk_gating_wait);
 
 		writel_relaxed(temp, host->dev_ref_clk_ctrl_mmio);
 
-		/* ensure that ref_clk is enabled/disabled before we return */
-		wmb();
+		/*
+		 * Make sure the write to ref_clk reaches the destination and
+		 * not stored in a Write Buffer (WB).
+		 */
+		readl(host->dev_ref_clk_ctrl_mmio);
 
 		/*
 		 * If we call hibern8 exit after this, we need to make sure that
-		 * device ref_clk is stable for at least 1us before the hibern8
+		 * device ref_clk is stable for a given time before the hibern8
 		 * exit command.
 		 */
-		if (enable)
-			udelay(1);
+		if (enable) {
+			if (host->hba->dev_info.quirks &
+			    UFS_DEVICE_QUIRK_WAIT_AFTER_REF_CLK_UNGATE)
+				usleep_range(50, 60);
+			else
+				udelay(1);
+		}
 
 		host->is_dev_ref_clk_enabled = enable;
 	}
@@ -1516,7 +1524,6 @@ static void ufs_qcom_set_caps(struct ufs_hba *hba)
 	if (!host->disable_lpm) {
 		hba->caps |= UFSHCD_CAP_CLK_GATING;
 		hba->caps |= UFSHCD_CAP_HIBERN8_WITH_CLK_GATING;
-		hba->caps |= UFSHCD_CAP_CLK_SCALING;
 	}
 	hba->caps |= UFSHCD_CAP_AUTO_BKOPS_SUSPEND;
 

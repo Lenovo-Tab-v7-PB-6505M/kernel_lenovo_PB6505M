@@ -1092,8 +1092,7 @@ static bool sdhci_needs_reset(struct sdhci_host *host, struct mmc_request *mrq)
 	return (!(host->flags & SDHCI_DEVICE_DEAD) &&
 		((mrq->cmd && mrq->cmd->error) ||
 		 (mrq->sbc && mrq->sbc->error) ||
-		 (mrq->data && ((mrq->data->error && !mrq->data->stop) ||
-				(mrq->data->stop && mrq->data->stop->error))) ||
+		 (mrq->data && mrq->data->stop && mrq->data->stop->error) ||
 		 (host->quirks & SDHCI_QUIRK_RESET_AFTER_REQUEST)));
 }
 
@@ -1147,6 +1146,16 @@ static void sdhci_finish_data(struct sdhci_host *host)
 
 	MMC_TRACE(host->mmc, "%s: 0x24=0x%08x\n", __func__,
 		sdhci_readl(host, SDHCI_PRESENT_STATE));
+	/*
+	 * The controller needs a reset of internal state machines upon error
+	 * conditions.
+	 */
+	if (data->error) {
+		if (!host->cmd || host->cmd == data_cmd)
+			sdhci_do_reset(host, SDHCI_RESET_CMD);
+		sdhci_do_reset(host, SDHCI_RESET_DATA);
+	}
+
 	if ((host->flags & (SDHCI_REQ_USE_DMA | SDHCI_USE_ADMA)) ==
 	    (SDHCI_REQ_USE_DMA | SDHCI_USE_ADMA))
 		sdhci_adma_table_post(host, data);
@@ -1171,17 +1180,6 @@ static void sdhci_finish_data(struct sdhci_host *host)
 	if (data->stop &&
 	    (data->error ||
 	     !data->mrq->sbc)) {
-
-		/*
-		 * The controller needs a reset of internal state machines
-		 * upon error conditions.
-		 */
-		if (data->error) {
-			if (!host->cmd || host->cmd == data_cmd)
-				sdhci_do_reset(host, SDHCI_RESET_CMD);
-			sdhci_do_reset(host, SDHCI_RESET_DATA);
-		}
-
 		/*
 		 * 'cap_cmd_during_tfr' request must not use the command line
 		 * after mmc_command_done() has been called. It is upper layer's
@@ -1388,6 +1386,10 @@ static u16 sdhci_get_preset_value(struct sdhci_host *host)
 	u16 preset = 0;
 
 	switch (host->timing) {
+	case MMC_TIMING_MMC_HS:
+	case MMC_TIMING_SD_HS:
+		preset = sdhci_readw(host, SDHCI_PRESET_FOR_HIGH_SPEED);
+		break;
 	case MMC_TIMING_UHS_SDR12:
 		preset = sdhci_readw(host, SDHCI_PRESET_FOR_SDR12);
 		break;
@@ -1591,6 +1593,12 @@ void sdhci_set_power_noreg(struct sdhci_host *host, unsigned char mode,
 			break;
 		case MMC_VDD_32_33:
 		case MMC_VDD_33_34:
+		/*
+		 * 3.4 ~ 3.6V are valid only for those platforms where it's
+		 * known that the voltage range is supported by hardware.
+		 */
+		case MMC_VDD_34_35:
+		case MMC_VDD_35_36:
 			pwr = SDHCI_POWER_330;
 			break;
 		default:
@@ -1824,8 +1832,7 @@ static void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 		if (mrq->data)
 			mrq->data->error = -EIO;
 		host->mrq = NULL;
-                //bug 395658 - case 03686575 - remove wrong debug logic
-		//sdhci_dumpregs(host);
+		sdhci_dumpregs(host);
 		mmc_request_done(host->mmc, mrq);
 		return;
 	}
@@ -2581,7 +2588,7 @@ static int sdhci_execute_tuning(struct mmc_host *mmc, u32 opcode)
 		spin_lock_irqsave(&host->lock, flags);
 
 		if (!host->tuning_done) {
-			pr_info(DRIVER_NAME ": Timeout waiting for Buffer Read Ready interrupt during tuning procedure, falling back to fixed sampling clock\n");
+			pr_debug(DRIVER_NAME ": Timeout waiting for Buffer Read Ready interrupt during tuning procedure, falling back to fixed sampling clock\n");
 			ctrl = sdhci_readw(host, SDHCI_HOST_CONTROL2);
 			ctrl &= ~SDHCI_CTRL_TUNED_CLK;
 			ctrl &= ~SDHCI_CTRL_EXEC_TUNING;
@@ -2988,7 +2995,7 @@ static void sdhci_timeout_data_timer(unsigned long data)
  *                                                                           *
 \*****************************************************************************/
 
-static void sdhci_cmd_irq(struct sdhci_host *host, u32 intmask)
+static void sdhci_cmd_irq(struct sdhci_host *host, u32 intmask, u32 *intmask_p)
 {
 	u16 auto_cmd_status;
 	if (!host->cmd) {
@@ -3037,16 +3044,9 @@ static void sdhci_cmd_irq(struct sdhci_host *host, u32 intmask)
 				host->cmd->error = -EILSEQ;
 		}
 
+		/* Treat data command CRC error the same as data CRC error */
+
 		/*
-		 * If this command initiates a data phase and a response
-		 * CRC error is signalled, the card can start transferring
-		 * data - the card may have received the command without
-		 * error.  We must not terminate the mmc_request early.
-		 *
-		 * If the card did not receive the command or returned an
-		 * error which prevented it sending data, the data phase
-		 * will time out.
-		 *
 		 * Even in case of cmd INDEX OR ENDBIT error we
 		 * handle it the same way.
 		 */
@@ -3054,6 +3054,7 @@ static void sdhci_cmd_irq(struct sdhci_host *host, u32 intmask)
 		    (((intmask & (SDHCI_INT_CRC | SDHCI_INT_TIMEOUT)) ==
 		     SDHCI_INT_CRC) || (host->cmd->error == -EILSEQ))) {
 			host->cmd = NULL;
+			*intmask_p |= SDHCI_INT_DATA_CRC;
 			return;
 		}
 
@@ -3290,7 +3291,7 @@ static int sdhci_get_data_err(struct sdhci_host *host, u32 intmask)
 	} else if (intmask & (SDHCI_INT_DATA_END_BIT | SDHCI_INT_DATA_CRC)) {
 		host->mmc->err_stats[MMC_ERR_DAT_CRC]++;
 		return -EILSEQ;
-	} else if (intmask & MMC_ERR_ADMA) {
+	} else if (intmask & SDHCI_INT_ADMA_ERROR) {
 		host->mmc->err_stats[MMC_ERR_ADMA]++;
 		return -EIO;
 	}
@@ -3436,7 +3437,7 @@ static irqreturn_t sdhci_irq(int irq, void *dev_id)
 			if ((host->quirks2 & SDHCI_QUIRK2_SLOW_INT_CLR) &&
 				(host->clock <= 400000))
 				udelay(40);
-			sdhci_cmd_irq(host, intmask & SDHCI_INT_CMD_MASK);
+			sdhci_cmd_irq(host, intmask & SDHCI_INT_CMD_MASK, &intmask);
 		}
 
 		if (intmask & SDHCI_INT_DATA_MASK) {
@@ -4227,11 +4228,13 @@ int sdhci_setup_host(struct sdhci_host *host)
 	if (host->ops->get_min_clock)
 		mmc->f_min = host->ops->get_min_clock(host);
 	else if (host->version >= SDHCI_SPEC_300) {
-		if (host->clk_mul) {
-			mmc->f_min = (host->max_clk * host->clk_mul) / 1024;
+		if (host->clk_mul)
 			max_clk = host->max_clk * host->clk_mul;
-		} else
-			mmc->f_min = host->max_clk / SDHCI_MAX_DIV_SPEC_300;
+		/*
+		 * Divided Clock Mode minimum clock rate is always less than
+		 * Programmable Clock Mode minimum clock rate.
+		 */
+		mmc->f_min = host->max_clk / SDHCI_MAX_DIV_SPEC_300;
 	} else
 		mmc->f_min = host->max_clk / SDHCI_MAX_DIV_SPEC_200;
 
@@ -4306,14 +4309,21 @@ int sdhci_setup_host(struct sdhci_host *host)
 	    !(mmc->caps2 & MMC_CAP2_NONHOTPLUG) && !host->mmc->extcon)
 		mmc->caps |= MMC_CAP_NEEDS_POLL;
 
-	/* If vqmmc regulator and no 1.8V signalling, then there's no UHS */
 	if (!IS_ERR(mmc->supply.vqmmc)) {
 		ret = regulator_enable(mmc->supply.vqmmc);
+
+		/* If vqmmc provides no 1.8V signalling, then there's no UHS */
 		if (!regulator_is_supported_voltage(mmc->supply.vqmmc, 1700000,
 						    1950000))
 			host->caps1 &= ~(SDHCI_SUPPORT_SDR104 |
 					 SDHCI_SUPPORT_SDR50 |
 					 SDHCI_SUPPORT_DDR50);
+
+		/* In eMMC case vqmmc might be a fixed 1.8V regulator */
+		if (!regulator_is_supported_voltage(mmc->supply.vqmmc, 2700000,
+						    3600000))
+			host->flags &= ~SDHCI_SIGNALING_330;
+
 		if (ret) {
 			pr_warn("%s: Failed to enable vqmmc regulator: %d\n",
 				mmc_hostname(mmc), ret);

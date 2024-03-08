@@ -29,6 +29,7 @@
 #include "sd_ops.h"
 
 #define DEFAULT_CMD6_TIMEOUT_MS	500
+#define MIN_CACHE_EN_TIMEOUT_MS 1600
 
 static const unsigned int tran_exp[] = {
 	10000,		100000,		1000000,	10000000,
@@ -435,10 +436,6 @@ static int mmc_decode_ext_csd(struct mmc_card *card, u8 *ext_csd)
 
 		/* EXT_CSD value is in units of 10ms, but we store in ms */
 		card->ext_csd.part_time = 10 * ext_csd[EXT_CSD_PART_SWITCH_TIME];
-		/* Some eMMC set the value too low so set a minimum */
-		if (card->ext_csd.part_time &&
-		    card->ext_csd.part_time < MMC_MIN_PART_SWITCH_TIME)
-			card->ext_csd.part_time = MMC_MIN_PART_SWITCH_TIME;
 
 		/* Sleep / awake timeout in 100ns units */
 		if (sa_shift > 0 && sa_shift <= 0x17)
@@ -554,8 +551,7 @@ static int mmc_decode_ext_csd(struct mmc_card *card, u8 *ext_csd)
 			card->cid.year += 16;
 
 		/* check whether the eMMC card supports BKOPS */
-		if (!mmc_card_broken_hpi(card) &&
-		    (ext_csd[EXT_CSD_BKOPS_SUPPORT] & 0x1) &&
+		if ((ext_csd[EXT_CSD_BKOPS_SUPPORT] & 0x1) &&
 				card->ext_csd.hpi) {
 			card->ext_csd.bkops = 1;
 			card->ext_csd.bkops_en = ext_csd[EXT_CSD_BKOPS_EN];
@@ -685,15 +681,23 @@ static int mmc_decode_ext_csd(struct mmc_card *card, u8 *ext_csd)
 				mmc_hostname(card->host),
 				card->ext_csd.barrier_support,
 				card->ext_csd.cache_flush_policy);
-		card->ext_csd.enhanced_rpmb_supported =
-			(card->ext_csd.rel_param &
-			 EXT_CSD_WR_REL_PARAM_EN_RPMB_REL_WR);
 	} else {
 		card->ext_csd.cmdq_support = 0;
 		card->ext_csd.cmdq_depth = 0;
 		card->ext_csd.barrier_support = 0;
 		card->ext_csd.cache_flush_policy = 0;
 	}
+
+	/*
+	 * GENERIC_CMD6_TIME is to be used "unless a specific timeout is defined
+	 * when accessing a specific field", so use it here if there is no
+	 * PARTITION_SWITCH_TIME.
+	 */
+	if (!card->ext_csd.part_time)
+		card->ext_csd.part_time = card->ext_csd.generic_cmd6_time;
+	/* Some eMMC set the value too low so set a minimum */
+	if (card->ext_csd.part_time < MMC_MIN_PART_SWITCH_TIME)
+		card->ext_csd.part_time = MMC_MIN_PART_SWITCH_TIME;
 
 	/* eMMC v5 or later */
 	if (card->ext_csd.rev >= 7) {
@@ -709,6 +713,13 @@ static int mmc_decode_ext_csd(struct mmc_card *card, u8 *ext_csd)
 		card->ext_csd.device_life_time_est_typ_b =
 			ext_csd[EXT_CSD_DEVICE_LIFE_TIME_EST_TYP_B];
 	}
+
+	/* eMMC v5.1 or later */
+	if (card->ext_csd.rev >= 8)
+		card->ext_csd.enhanced_rpmb_supported =
+			(card->ext_csd.rel_param &
+			 EXT_CSD_WR_REL_PARAM_EN_RPMB_REL_WR);
+
 out:
 	return err;
 }
@@ -888,132 +899,6 @@ static ssize_t mmc_dsr_show(struct device *dev,
 
 static DEVICE_ATTR(dsr, S_IRUGO, mmc_dsr_show, NULL);
 
-static int calc_mem_size(void)
-{
-	int temp_size;
-	temp_size = (int)totalram_pages/1024; //page size 4K
-
-	if ((temp_size > 0*256) && (temp_size <= 1*256))
-		return 1;
-	else if ((temp_size > 1*256) && (temp_size <= 2*256))
-		return 2;
-	else if ((temp_size > 2*256) && (temp_size <= 3*256))
-		return 3;
-	else if ((temp_size > 3*256) && (temp_size <= 4*256))
-		return 4;
-	else if ((temp_size > 4*256) && (temp_size <= 6*256))
-		return 6;
-	else if ((temp_size > 6*256) && (temp_size <= 8*256))
-		return 8;
-	else
-		return 0;
-}
-
-static int calc_mmc_size(struct mmc_card *card)
-{
-	int temp_size;
-	temp_size = (int)card->ext_csd.sectors/2/1024/1024; //sector size 512B
-
-	if ((temp_size > 8) && (temp_size <= 16))
-		return 16;
-	else if ((temp_size > 16) && (temp_size <= 32))
-		return 32;
-	else if ((temp_size > 32) && (temp_size <= 64))
-		return 64;
-	else if ((temp_size > 64) && (temp_size <= 128))
-		return 128;
-	else if ((temp_size > 128) && (temp_size <= 256))
-		return 256;
-	else
-		return 0;
-}
-
-static ssize_t flash_name_show(struct device *dev,
-	struct device_attribute *attr,
-	char *buf)
-{
-	struct mmc_card *card = mmc_dev_to_card(dev);
-	char *vendor_name = NULL;
-	char *emcp_name = NULL;
-
-	switch (card->cid.manfid) {
-		case 0x11:
-			vendor_name = "Toshiba";
-			break;
-		case 0x13:
-			vendor_name = "Micron";
-			break;
-		case 0x15:
-			vendor_name = "Samsung";
-			if (strncmp(card->cid.prod_name, "QE63MB", strlen("QE63MB")) == 0)
-				emcp_name = "KMQE60013M-B318";
-			else if  (strncmp(card->cid.prod_name, "GD6BMB", strlen("GD6BMB")) == 0)
-				emcp_name = "KMGD6001BM-B421";
-			else if  (strncmp(card->cid.prod_name, "GP6BMB", strlen("GP6BMB")) == 0)
-				emcp_name = "KMGP6001BM-B514";
-			else if  (strncmp(card->cid.prod_name, "RH64AB", strlen("RH64AB")) == 0)
-				emcp_name = "KMRH60014A-B614";
-			else
-				emcp_name = NULL;
-			break;
-		case 0x45:
-			vendor_name = "Sandisk";
-			break;
-		case 0x90:
-			vendor_name = "Hynix";
-			if (strncmp(card->cid.prod_name, "HAG4a2", strlen("HAG4a2")) == 0)
-				emcp_name = "H9TQ17ABJTCCUR";
-			else if (strncmp(card->cid.prod_name, "HBG4a2", strlen("HBG4a2")) == 0)
-				emcp_name = "H9TQ26ABJTACUR";
-			else if (strncmp(card->cid.prod_name, "hB8aP", strlen("hB8aP")) == 0)
-				emcp_name = "H9TQ27ADFTMCUR";
-			else
-				emcp_name = NULL;
-			break;
-		default:
-			vendor_name = "Unknown";
-			break;
-	}
-
-	if (emcp_name == NULL)
-		emcp_name = card->cid.prod_name;
-	return sprintf(buf, "%s_%s_%dGB_%dGB\n",vendor_name, emcp_name, calc_mem_size(), calc_mmc_size(card));
-}
-
-static DEVICE_ATTR(flash_name, S_IRUGO, flash_name_show, NULL);
-
-static ssize_t vendor_name_show(struct device *dev,
-	struct device_attribute *attr,
-	char *buf)
-{
-	struct mmc_card *card = mmc_dev_to_card(dev);
-	char *vendor_name = NULL;
-
-	switch (card->cid.manfid) {
-		case 0x11:
-			vendor_name = "Toshiba";
-			break;
-		case 0x13:
-			vendor_name = "Micron";
-			break;
-		case 0x15:
-			vendor_name = "Samsung";
-			break;
-		case 0x45:
-			vendor_name = "Sandisk";
-			break;
-		case 0x90:
-			vendor_name = "Hynix";
-			break;
-		default:
-			vendor_name = "Unknown";
-			break;
-	}
-
-	return sprintf(buf, "%s\n",vendor_name);
-}
-static DEVICE_ATTR(vendor, S_IRUGO, vendor_name_show, NULL);
-
 static struct attribute *mmc_std_attrs[] = {
 	&dev_attr_cid.attr,
 	&dev_attr_csd.attr,
@@ -1038,8 +923,6 @@ static struct attribute *mmc_std_attrs[] = {
 	&dev_attr_rel_sectors.attr,
 	&dev_attr_ocr.attr,
 	&dev_attr_dsr.attr,
-	&dev_attr_flash_name.attr,  
-	&dev_attr_vendor.attr,  
 	NULL,
 };
 ATTRIBUTE_GROUPS(mmc_std);
@@ -2075,23 +1958,6 @@ reinit:
 		goto err;
 	}
 
-	#ifdef CONFIG_MMC_FFU
-	if (oldcard && (oldcard->state & MMC_STATE_FFUED)) {
-		/* After FFU, some fields in CID may change,
-		 * so just copy new CID into card->raw_cid
-		 */
-		memcpy((void *)oldcard->raw_cid, (void *)cid, sizeof(cid));
-		err = mmc_decode_cid(oldcard);
-		if (err)
-			goto free_card;
-
-		card = oldcard;
-		card->nr_parts = 0;
-		oldcard = NULL;
-
-	} else
-	#endif
-
 	if (oldcard) {
 		if (memcmp(cid, oldcard->raw_cid, sizeof(cid)) != 0) {
 			err = -ENOENT;
@@ -2343,23 +2209,30 @@ reinit:
 		if (err) {
 			pr_warn("%s: Enabling HPI failed\n",
 				mmc_hostname(card->host));
+			card->ext_csd.hpi_en = 0;
 			err = 0;
-		} else
+		} else {
 			card->ext_csd.hpi_en = 1;
+		}
 	}
 
 	/*
-	 * If cache size is higher than 0, this indicates
-	 * the existence of cache and it can be turned on.
+	 * If cache size is higher than 0, this indicates the existence of cache
+	 * and it can be turned on. Note that some eMMCs from Micron has been
+	 * reported to need ~800 ms timeout, while enabling the cache after
+	 * sudden power failure tests. Let's extend the timeout to a minimum of
+	 * DEFAULT_CACHE_EN_TIMEOUT_MS and do it for all cards.
 	 * If HPI is not supported then cache shouldn't be enabled.
 	 */
-	if (!mmc_card_broken_hpi(card) &&
-	    card->ext_csd.cache_size > 0) {
+	if (card->ext_csd.cache_size > 0) {
 		if (card->ext_csd.hpi_en &&
 			(!(card->quirks & MMC_QUIRK_CACHE_DISABLE))) {
-			err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
-					EXT_CSD_CACHE_CTRL, 1,
-					card->ext_csd.generic_cmd6_time);
+			unsigned int timeout_ms = MIN_CACHE_EN_TIMEOUT_MS;
+
+		  timeout_ms = max(card->ext_csd.generic_cmd6_time, timeout_ms);
+		  err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+				  EXT_CSD_CACHE_CTRL, 1, timeout_ms);
+
 			if (err && err != -EBADMSG) {
 				pr_err("%s: %s: fail on CACHE_CTRL ON %d\n",
 					mmc_hostname(host), __func__, err);
@@ -2493,8 +2366,6 @@ reinit:
 		}
 	}
 
-	pr_err("%s: %s: successed\n",mmc_hostname(host), __func__);
-
 	return 0;
 
 free_card:
@@ -2505,13 +2376,6 @@ free_card:
 err:
 	return err;
 }
-
-#ifdef CONFIG_MMC_FFU
-int mmc_reinit_oldcard(struct mmc_host *host)
-{
-	return mmc_init_card(host, host->card->ocr, host->card);
-}
-#endif
 
 static int mmc_can_sleepawake(struct mmc_host *host)
 {
@@ -3127,15 +2991,20 @@ static int mmc_runtime_suspend(struct mmc_host *host)
  */
 static int mmc_runtime_resume(struct mmc_host *host)
 {
-	int err;
+	int err = 0;
 	ktime_t start = ktime_get();
 
 	MMC_TRACE(host, "%s\n", __func__);
+
+	if (!(host->caps & MMC_CAP_AGGRESSIVE_PM))
+		goto out;
+
 	err = _mmc_resume(host);
 	if (err && err != -ENOMEDIUM)
 		pr_err("%s: error %d doing runtime resume\n",
 			mmc_hostname(host), err);
 
+out:
 	trace_mmc_runtime_resume(mmc_hostname(host), err,
 			ktime_to_us(ktime_sub(ktime_get(), start)));
 
